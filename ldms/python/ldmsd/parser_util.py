@@ -12,11 +12,6 @@ import ldmsd.hostlist as hostlist
 import logging
 import pprint
 
-AUTH_ATTRS = [
-    'auth',
-    'conf'
-]
-
 CORE_ATTRS = [
     'daemons',
     'aggregators',
@@ -102,13 +97,10 @@ def check_intrvl_str(interval_s):
 
 def check_opt(attr, spec):
     # Check for optional argument and return None if not present
-    if attr in AUTH_ATTRS:
-        if attr == 'auth':
-            attr = 'name'
-        if 'auth' in spec:
-            spec = spec['auth']
-        else:
-            return None
+    if attr == 'auth':
+        attr = 'name'
+    if 'auth' in spec:
+         spec = spec['auth']
     if attr in spec:
         if attr in INT_ATTRS:
             if spec[attr] is not None:
@@ -144,7 +136,9 @@ def check_auth(auth_spec):
     if not name:
         return None, None, None
     plugin = check_opt('plugin', auth_spec['auth'])
-    auth_opt = check_opt('conf', auth_spec)
+    auth_opt = check_opt('auth_opt', auth_spec['auth'])
+    if not auth_opt:
+        auth_opt = check_opt('conf', auth_spec['auth'])
     return name, plugin, auth_opt
 
 def check_plugin_config(plugn, plugin_spec):
@@ -374,7 +368,9 @@ class YamlCfg(object):
                     ep_name = ep_.pop(0)
                     xprt = check_opt('xprt', ep)
                     auth_name = check_opt('auth', ep)
-                    auth_conf = check_opt('conf', ep)
+                    auth_opt = check_opt('auth_opt', ep['auth'])
+                    if not auth_opt:
+                        auth_opt = check_opt('conf', ep['auth'])
                     plugin = check_opt('plugin', ep['auth'])
                     maestro_comm = parse_yaml_bool(check_opt('maestro_comm', ep))
                     h = {
@@ -382,7 +378,7 @@ class YamlCfg(object):
                         'port' : port,
                         'xprt' : xprt,
                         'maestro_comm' : maestro_comm,
-                        'auth' : { 'name' : auth_name, 'conf' : auth_conf, 'plugin' : plugin }
+                        'auth' : { 'name' : auth_name, 'auth_opt' : auth_opt, 'plugin' : plugin }
                     }
                     if check_opt('bind_all', ep):
                         h['bind_all'] = ep['bind_all']
@@ -422,8 +418,8 @@ class YamlCfg(object):
                                              'port'      : ad_grp['port'],
                                              'reconnect' : ad_grp['reconnect'],
                                              'auth'      : { 'name' : auth_name,
-                                                             'conf' : auth_opt,
-                                                             'plugin' : plugin },
+                                                             'plugin' : plugin,
+                                                             'auth_opt' : auth_opt },
                                              'perm'      : perm,
                                              'rail'      : rail,
                                              'quota'   : quota,
@@ -820,6 +816,25 @@ class YamlCfg(object):
         start_list.append(f'-F')
         return start_list
 
+    def write_auth_add(self, dstr, auth, plugin, auth_opt, auth_listen):
+        if not auth:
+            return dstr, auth_listen
+        if auth not in auth_listen:
+            auth_listen[auth] = { 'plugin' : plugin, 'auth_opt' : auth_opt }
+            dstr = f'auth_add name={auth}'
+            if auth_opt:
+                for k, v in auth_opt.items():
+                    dstr = self.write_opt_attr(dstr, k, v)
+            dstr = self.write_opt_attr(dstr, 'plugin', plugin, endline=True)
+        return dstr, auth_listen
+
+    def write_auth_opt(self, dstr, auth_opt):
+        if not auth_opt:
+            return dstr
+        for k, v in auth_opt.items():
+            dstr = self.write_opt_attr(dstr, k, v)
+        return dstr
+
     def write_advertisers(self, dstr, dmn_grp, dname, auth_listen):
         if dmn_grp not in self.advertisers:
             return dstr, auth_listen
@@ -830,11 +845,7 @@ class YamlCfg(object):
             rail = check_opt('rail', ad_grp)
             quota = check_opt('quota', ad_grp)
             rx_rate = check_opt('rx_rate', ad_grp)
-            if auth not in auth_listen:
-                auth_listen[auth] = { 'conf' : auth_opt }
-                dstr += f'auth_add name={auth}'
-                dstr = self.write_opt_attr(dstr, 'plugin', plugin)
-                dstr = self.write_opt_attr(dstr, 'conf', auth_opt, endline=True)
+            dstr, auth_listen = self.write_auth_add(dstr, auth, plugin, auth_opt, auth_listen)
             dstr += f'advertiser_add name={dname}-{host} host={host} xprt={ad_grp["xprt"]} port={ad_grp["port"]} '\
                     f'reconnect={ad_grp["reconnect"]}'
             dstr = self.write_opt_attr(dstr, 'auth', auth)
@@ -881,21 +892,13 @@ class YamlCfg(object):
         for endp in self.daemons[dmn_name]['endpoints']:
             ep = self.daemons[dmn_name]['endpoints'][endp]
             auth, plugin, auth_opt = check_auth(ep)
-            if auth:
-                if auth not in auth_listen:
-                    auth_listen[auth] = { 'conf' : auth_opt }
-                    dstr += f'auth_add name={auth}'
-                    dstr = self.write_opt_attr(dstr, 'plugin', plugin)
-                    dstr = self.write_opt_attr(dstr, 'conf', auth_opt, endline=True)
-            if ep["port"] not in auth_listen:
-                auth_listen[ep["port"]] = True
+            if ep['port'] not in auth_listen:
+                dstr, auth_listen = self.write_auth_add(dstr, auth, plugin, auth_opt, auth_listen)
                 dstr += f'listen xprt={ep["xprt"]} port={ep["port"]}'
                 dstr = self.write_opt_attr(dstr, 'auth', auth)
-                dstr = self.write_opt_attr(dstr, 'conf', auth_opt)
                 bind_all = check_opt('bind_all', ep)
                 if bind_all is True or bind_all == "true":
                     host = "0.0.0.0"
-                    # is this all addresses or only all v4 addresses? use ::/0
                 else:
                     host = check_opt('host', ep)
                     if host is None:
@@ -922,16 +925,8 @@ class YamlCfg(object):
             auth = None
             for ep in prod_group:
                 producer = self.producers[group_name][ep]
-                auth = check_opt('auth', self.daemons[producer['daemon']]['endpoints'][ep])
-                auth_opt = check_opt('conf', self.daemons[producer['daemon']]['endpoints'][ep])
-                if auth not in auth_listen:
-                    auth_listen[auth] = { 'conf' : auth_opt }
-                    plugin = check_opt('plugin', self.daemons[producer['daemon']]['endpoints'][ep]['auth'])
-                    if plugin is None:
-                        plugin = auth
-                    dstr += f'auth_add name={auth} plugin={plugin}'
-                    dstr = self.write_opt_attr(dstr, 'conf', auth_listen[auth]['conf'], endline=True)
-            for ep in prod_group:
+                auth, plugin, auth_opt = check_auth(self.daemons[producer['daemon']]['endpoints'][ep])
+                dstr, auth_listen = self.write_auth_add(dstr, auth, plugin, auth_opt, auth_listen)
                 regex = False
                 producer = self.producers[group_name][ep]
                 pname = producer['name']
@@ -940,7 +935,6 @@ class YamlCfg(object):
                 hostname = check_opt('host', self.daemons[producer['daemon']]['endpoints'][ep])
                 if hostname is None:
                     hostname = self.daemons[producer['daemon']]['addr']
-                auth = check_opt('auth', self.daemons[producer['daemon']]['endpoints'][ep])
                 perm = check_opt('perm', producer)
                 rail = check_opt('rail', self.daemons[producer['daemon']]['endpoints'][ep])
                 rx_rate = check_opt('rx_rate', self.daemons[producer['daemon']]['endpoints'][ep])

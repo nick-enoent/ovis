@@ -162,10 +162,13 @@ List of dictionaries of endpoint configurations for these daemons.
          |
          | Name of the authentication domain plugin <ovis/munge>
 
-      **conf**
+      **[auth_opt || conf]**
          |
-         | Dictionary of plugin specific configuration options for this
-           authentication domain.
+         | Optional dictionary of plugin specific configuration options
+           for this authentication domain.
+
+         **"auth_opt": {"conf" : "/opt/ovis/secret.conf",
+                        "socket" : "/munge/socket.1" }**
 
 stream_enable
 -------------
@@ -559,12 +562,13 @@ plugins defined in the "plugins" top level dictionary.
          |
          | Name of the authentication domain plugin <ovis/munge>
 
-      **[conf]**
+      **[auth_opt || conf]**
          |
          | Optional dictionary of plugin specific configuration options
            for this authentication domain.
 
-         **["path"**:**/opt/ovis/secret.conf**]
+         **"auth_opt": {"conf" : "/opt/ovis/secret.conf",
+                        "socket" : "/munge/socket.1" }**
 
 stores
 ======
