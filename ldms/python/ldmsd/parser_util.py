@@ -9,6 +9,7 @@ import bisect
 import itertools as it
 import collections
 import ldmsd.hostlist as hostlist
+import sys
 
 AUTH_ATTRS = [
     'auth',
@@ -127,7 +128,10 @@ def check_required(attr_list, container, container_name):
 def NUM_STR(obj):
     return str(obj) if type(obj) in [ int, float ] else obj
 
+hostlist_cache = {}
 def expand_names(name_spec):
+    if name_spec in hostlist_cache:
+        return hostlist_cache[name_spec]
     if type(name_spec) != str and isinstance(name_spec, collections.abc.Sequence):
         names = []
         for name in name_spec:
@@ -135,7 +139,11 @@ def expand_names(name_spec):
     else:
         names = hostlist.expand_hostlist(NUM_STR(name_spec))
     names.sort()
-    return names
+    hostlist_cache[name_spec] = names
+    try:
+        return names
+    except Exception as e:
+        print(f'{e}')
 
 def check_auth(auth_spec):
     name = check_opt('auth', auth_spec)
@@ -251,8 +259,8 @@ def perm_handler(perm_str):
             raise ValueError(f'Error: YAML permisson string "{perm_str} is not a valid octal"\n'
                              f'Must represent either a valid octal number, or use unix-like vernacular\n'
                              f'Allowed format: (r|-)(w|-)-(r|-)(w|-)-(r|-)(w|-)-')
-
     return '0'+oct(perms)[2:]
+
 perm_handler.string_pattern = re.compile('(?:(r)|-)(?:(w)|-)-(?:(r)|-)(?:(w)|-)-(?:(r)|-)(?:(w)|-)-')
 perm_handler.octal_pattern = re.compile('^0?[0-7]{1,3}')
 
@@ -295,7 +303,7 @@ class YamlCfg(object):
         }
 
         """
-        ep_dict = {}
+        dmn_dict = {}
         node_config = config['daemons']
         if type(node_config) is not list:
             raise TypeError(f'{LDMS_YAML_ERR}\n'
@@ -308,44 +316,9 @@ class YamlCfg(object):
                            spec, '"daemons" entry')
             dnames = expand_names(spec['names'])
             hosts = expand_names(spec['hosts'])
-            hostnames = hosts
-            if len(dnames) != len(hostnames):
-                hosts = [ [host]*(len(dnames)//len(hostnames)) for host in hostnames ]
-                hosts = list(it.chain.from_iterable(hosts))
-            ep_names = []
-            ep_ports = []
-            ep_hosts = []
-            if type(spec['endpoints']) is not list:
-                raise TypeError(f'{LDMS_YAML_ERR}\n'
-                                f'endpoints {LIST_ERR}\n'
-                                f'e.g endpoints :\n'
-                                f'      - names : &l1-agg-endpoints "node-[1-8]-[10101]"\n'
-                                f'        ports : &agg-ports "[10101]"\n'
-                                f'        maestro_comm : True\n'
-                                f'        xprt  : sock\n'
-                                f'        auth  :\n'
-                                f'          name : munge1\n'
-                                f'          plugin : munge\n')
-            for endpoints in spec['endpoints']:
-                check_required(['names','ports'],
-                               endpoints, f'"endpoints" entry of daemons {spec["names"]}')
-                cur_epnames = expand_names(endpoints['names'])
-                ep_names.append(cur_epnames)
-                cur_ports = expand_names(endpoints['ports'])
-                _ports = cur_ports
-                if len(cur_ports) != len(cur_epnames):
-                    cur_ports = [ _ports for i in range(0, len(cur_epnames)//len(_ports)) ]
-                    cur_ports = list(it.chain.from_iterable(cur_ports))
-                ep_ports.append(cur_ports)
-                if check_opt('hosts', endpoints):
-                    cur_ephosts = expand_names(endpoints['hosts'])
-                    _ephosts = cur_ephosts
-                    if len(cur_ephosts) != len(cur_epnames):
-                        cur_ephosts = [ [host]*(len(cur_epnames)//len(_ephosts)) for host in _ephosts ]
-                        cur_ephosts = list(it.chain.from_iterable(cur_ephosts))
-                    ep_hosts.append(cur_ephosts)
-                else:
-                    ep_hosts.append([])
+            if len(hosts) > len(dnames):
+                raise ValueError('Configuration error: The hostlist string must expand to be equal to or less than\
+                                  the length of the expanded daemon names hostlist string')
             env = check_opt('environment', spec)
             cli_opt = {}
             stream_enabled = False
@@ -357,44 +330,72 @@ class YamlCfg(object):
                     msg_enabled = spec['msg_enable']
                 elif key not in ['hosts','names','endpoints','environment']:
                     cli_opt[key] = spec[key]
-            for dname, host in zip(dnames, hosts):
-                ep_dict[dname] = {}
-                ep_dict[dname]['addr'] = host
-                ep_dict[dname]['environment'] = env
-                ep_dict[dname]['endpoints'] = {}
+            i = 0
+            for dname in dnames:
+                dmn_dict[dname] = {}
+                dmn_dict[dname]['addr'] = hosts[i]
+                dmn_dict[dname]['environment'] = env
+                dmn_dict[dname]['endpoints'] = {}
                 if len(cli_opt):
-                    ep_dict[dname]['cli_opt'] = cli_opt
-                ep_dict[dname]['stream_enable'] = stream_enabled
-                ep_dict[dname]['msg_enable'] = msg_enabled
-                dcount = 0
-                for ep_, ep_port, ep in zip(ep_names, ep_ports, spec['endpoints']):
-                    port = ep_port.pop(0)
-                    ep_name = ep_.pop(0)
-                    xprt = check_opt('xprt', ep)
-                    auth_name = check_opt('auth', ep)
-                    auth_conf = check_opt('conf', ep)
-                    plugin = check_opt('plugin', ep['auth'])
-                    maestro_comm = parse_yaml_bool(check_opt('maestro_comm', ep))
+                    dmn_dict[dname]['cli_opt'] = cli_opt
+                dmn_dict[dname]['stream_enable'] = stream_enabled
+                dmn_dict[dname]['msg_enable'] = msg_enabled
+                i = (i + 1) % len(hosts)
+                ep_i = 0
+
+            for endpoints in spec['endpoints']:
+                check_required(['names','ports'],
+                                 endpoints, '"endpoints" entry')
+                ep_names = expand_names(endpoints['names'])
+                ports = expand_names(endpoints['ports'])
+                ep_hosts = check_opt('hosts', endpoints)
+                if ep_hosts:
+                    ep_hosts = expand_names(ep_hosts)
+                if len(ports) !=1 and len(ep_names) != len(ports):
+                    raise ValueError(f'Error processing endpoint names and ports. The expanded hostlist values\n'
+                                     f'must have the same length.\n'
+                                     f'endpoints length : {len(ep_names)}\n'
+                                     f'endpoints        : {ep_names[0:3]}...\n'
+                                     f'ports length     : {len(ports)}\n'
+                                     f'ports            : {ports[0:3]}...\n')
+                if ep_hosts and len(ep_hosts) != len(ep_names):
+                    raise ValueError(f'Error processing enpoint names and hosts. Unless daemons are on a shared host, the expanded'
+                                     f'hostlist values must have the same length.\n'
+                                     f'endpoints length : {len(ep_names)}\n'
+                                     f'endpoints        : {ep_names[0:3]}...\n'
+                                     f'host length      : {len(ep_hosts)}\n'
+                                     f'hosts            : {hosts[0:3]}...\n')
+                # endpoint port index
+                ep_i = 0
+                # endpoint host index
+                ep_hi = 0
+                for dname, ep_name in zip(dnames, ep_names):
+                    xprt = check_opt('xprt', endpoints['xprt'])
+                    auth_name = check_opt('auth', endpoints)
+                    auth_opt = check_opt('conf', endpoints)
+                    plugin = check_opt('plugin', endpoints['auth'])
+                    maestro_comm = parse_yaml_bool(check_opt('maestro_comm', endpoints))
                     h = {
                         'name' : ep_name,
-                        'port' : port,
+                        'port' : ports[ep_i],
                         'xprt' : xprt,
                         'maestro_comm' : maestro_comm,
-                        'auth' : { 'name' : auth_name, 'conf' : auth_conf, 'plugin' : plugin }
+                        'auth' : { 'name' : auth_name, 'conf' : auth_opt, 'plugin' : plugin }
                     }
-                    if check_opt('bind_all', ep):
-                        h['bind_all'] = ep['bind_all']
-                    _ephost = check_opt('hosts', ep)
-                    if _ephost:
-                        h['host'] = ep_hosts[dcount].pop(0)
-                    ep_dict[dname]['endpoints'][ep_name] = h
-                    dcount += 1
-            if len(ep_dict) == 0:
-                raise ValueError(f'Error processing regex of hostnames {spec["hosts"]} and daemons {spec["names"]}.\n'
+                    if check_opt('bind_all', endpoints):
+                        h['bind_all'] = endpoints['bind_all']
+                    if ep_hosts:
+                        h['host'] = ep_hosts[ep_hi]
+                        ep_hi = (ep_hi + 1) % len(ep_hosts)
+                    dmn_dict[dname]['endpoints'][ep_name] = h
+                    ep_i = (ep_i + 1) % len(ports)
+
+            if len(dmn_dict) == 0:
+                raise ValueError(f'Error processing hostlist value of hosts {spec["hosts"]} and daemons {spec["names"]}.\n'
                                  f'Number of hosts must be a multiple of daemons with appropriate ports or equivalent to length of daemons.\n'
-                                 f'Regex {spec["hosts"]} translates to {len(hostnames)} hosts\n'
-                                 f'Regex {spec["names"]} translates to {len(dnames)} daemons\n')
-        return ep_dict
+                                 f'Hostlist string {spec["hosts"]} translates to {len(hosts)} hosts\n'
+                                 f'Hostlist string {spec["names"]} translates to {len(dnames)} daemons\n')
+        return dmn_dict
 
     def build_advertisers(self, spec):
         if 'advertise' not in spec:
@@ -520,62 +521,49 @@ class YamlCfg(object):
                                 f'         ...       : ...\n')
             for prod in agg['peers']:
                 check_required([ 'endpoints', 'reconnect', 'type', ],
-                               prod, f'"peers" entry of {prod}')
-                # Use endpoints for producer names and remove names attribute?
-                if prod['daemons'] not in self.daemons:
-                    dmn_grps = prod['daemons'].split(',')
-                    eps = prod['endpoints'].split(',')
-                else:
-                    dmn_grps = [ prod['daemons'] ]
-                    eps = [ prod['endpoints'] ]
-                for daemons, endpoints in zip(dmn_grps, eps):
-                    names = expand_names(endpoints)
-                    endpoints = expand_names(endpoints)
-                    group = agg['daemons']
-                    smplr_dmns = expand_names(daemons)
-                    if group not in producers:
-                        producers[group] = {}
+                               prod, '"peers" entry')
+                endpoints = prod['endpoints']
+                daemons = prod['daemons']
+                smplr_dmns = expand_names(daemons)
+                endpoints = expand_names(endpoints)
+                if len(smplr_dmns) != len(endpoints):
+                    raise ValueError(f'Configuration Error: Parsing producer endpoints. Producers must have a single endpoint.\n')
+                group = agg['daemons']
+                if group not in producers:
+                    producers[group] = {}
 
-                    upd_spec = check_opt('updaters', prod)
-                    # Expand and generate all the producers
-                    typ = prod['type']
-                    reconnect = check_intrvl_str(prod['reconnect'])
-                    perm = check_opt('perm', prod)
-                    perm = perm_handler(perm)
-                    rail = check_opt('rail', prod)
-                    quota = check_opt('quota', prod)
-                    rx_rate = check_opt('rx_rate', prod)
-                    cache_ip = check_opt('cache_ip', prod)
-                    ports_per_dmn = len(endpoints) / len(smplr_dmns)
-                    ppd = ports_per_dmn
-                    try:
-                        for name in names:
-                            if ppd > 1:
-                                smplr_dmn = smplr_dmns[0]
-                                ppd -= 1
-                            else:
-                                smplr_dmn = smplr_dmns.pop(0)
-                                ppd = ports_per_dmn
-                            endpoint = endpoints.pop(0)
-                            prod = {
-                                'daemon'    : smplr_dmn,
-                                'dmn_grp'   : daemons,
-                                'name'      : name,
-                                'endpoint'  : endpoint,
-                                'type'      : typ,
-                                'group'     : group,
-                                'reconnect' : reconnect,
-                                'perm'      : perm,
-                                'rail'      : rail,
-                                'quota'     : quota,
-                                'rx_rate'   : rx_rate,
-                                'cache_ip'  : cache_ip,
-                                'updaters'  : upd_spec
-                            }
-                            producers[group][endpoint] = prod
-                    except:
-                        raise ValueError(f'Mismatch in producer config:\n'
-                                         f'Please ensure "endpoints" is configured to the correct number of ports specified.\n')
+                upd_spec = check_opt('updaters', prod)
+                # Expand and generate all the producers
+                typ = prod['type']
+                reconnect = check_intrvl_str(prod['reconnect'])
+                perm = check_opt('perm', prod)
+                perm = perm_handler(perm)
+                rail = check_opt('rail', prod)
+                quota = check_opt('quota', prod)
+                rx_rate = check_opt('rx_rate', prod)
+                cache_ip = check_opt('cache_ip', prod)
+                try:
+                    i = 0
+                    for smplr_dmn in smplr_dmns:
+                        prod = {
+                            'daemon'    : smplr_dmn,
+                            'dmn_grp'   : daemons,
+                            'endpoint'  : endpoints[i],
+                            'type'      : typ,
+                            'group'     : group,
+                            'reconnect' : reconnect,
+                            'perm'      : perm,
+                            'rail'      : rail,
+                            'quota'     : quota,
+                            'rx_rate'   : rx_rate,
+                            'cache_ip'  : cache_ip,
+                            'updaters'  : upd_spec
+                        }
+                        producers[group][endpoints[i]] = prod
+                        i += 1
+                except:
+                    raise ValueError(f'Mismatch in producer config:\n'
+                                     f'Please ensure "endpoints" is configured to the correct number of ports specified.\n')
         return producers
 
     def build_updaters(self, config):
@@ -911,61 +899,63 @@ class YamlCfg(object):
             dstr += f'\n'
         return dstr
 
-    def write_producers(self, dstr, group_name, dmn, auth_listen):
-        if group_name in self.producers:
-            ''' Balance samplers across aggregators '''
-            prdcrs = list(self.producers[group_name].keys())
-            aggs = expand_names(group_name)
-            agg_idx = int(aggs.index(dmn))
-            prod_group = dist_list(prdcrs, len(aggs))[agg_idx]
-            i = 0
-            auth = None
-            for ep in prod_group:
-                producer = self.producers[group_name][ep]
-                auth = check_opt('auth', self.daemons[producer['daemon']]['endpoints'][ep])
-                auth_opt = check_opt('conf', self.daemons[producer['daemon']]['endpoints'][ep])
-                if auth not in auth_listen:
-                    auth_listen[auth] = { 'conf' : auth_opt }
-                    plugin = check_opt('plugin', self.daemons[producer['daemon']]['endpoints'][ep]['auth'])
-                    if plugin is None:
-                        plugin = auth
-                    dstr += f'auth_add name={auth} plugin={plugin}'
-                    dstr = self.write_opt_attr(dstr, 'conf', auth_listen[auth]['conf'], endline=True)
-            for ep in prod_group:
-                regex = False
-                producer = self.producers[group_name][ep]
-                pname = producer['name']
-                port = self.daemons[producer['daemon']]['endpoints'][ep]['port']
-                xprt = self.daemons[producer['daemon']]['endpoints'][ep]['xprt']
-                hostname = check_opt('host', self.daemons[producer['daemon']]['endpoints'][ep])
-                if hostname is None:
-                    hostname = self.daemons[producer['daemon']]['addr']
-                auth = check_opt('auth', self.daemons[producer['daemon']]['endpoints'][ep])
-                perm = check_opt('perm', producer)
-                rail = check_opt('rail', self.daemons[producer['daemon']]['endpoints'][ep])
-                rx_rate = check_opt('rx_rate', self.daemons[producer['daemon']]['endpoints'][ep])
-                quota = check_opt('quota', self.daemons[producer['daemon']]['endpoints'][ep])
-                cache_ip = check_opt('cache_ip', producer)
-                ptype = producer['type']
-                reconnect = producer['reconnect']
-                dstr += f'prdcr_add name={pname} '\
-                        f'host={hostname} '\
-                        f'port={port} '\
-                        f'xprt={xprt} '\
-                        f'type={ptype} '\
-                        f'reconnect={reconnect}'
-                dstr = self.write_opt_attr(dstr, 'cache_ip', cache_ip)
-                dstr = self.write_opt_attr(dstr, 'perm', perm)
-                dstr = self.write_opt_attr(dstr, 'auth', auth)
-                dstr = self.write_opt_attr(dstr, 'rail', rail)
-                dstr = self.write_opt_attr(dstr, 'rx_rate', rx_rate)
-                dstr = self.write_opt_attr(dstr, 'quota', quota, endline=True)
-                last_sampler = pname
-                if 'regex' in producer:
-                    dstr += f'prdcr_start_regex regex={producer["regex"]}\n'
-                else :
-                    dstr += f'prdcr_start name={pname}\n'
-        return dstr, auth_listen
+    def write_producers(self, dstr, group_name, dmn, auth_list):
+        try:
+            if group_name in self.producers:
+                ''' Balance samplers across aggregators '''
+                prdcrs = list(self.producers[group_name].keys())
+                aggs = expand_names(group_name)
+                agg_idx = int(aggs.index(dmn))
+                prod_group = dist_list(prdcrs, len(aggs))[agg_idx]
+                agg_len = len(aggs)
+                auth = None
+                for ep in prod_group:
+                    producer = self.producers[group_name][ep]
+                    if ep not in self.daemons[producer['daemon']]['endpoints']:
+                        raise ValueError(f'Configuration Error: Endpoint {ep} of LDMSD {producer["daemon"]} is not present as a peer for {dmn}\n')
+                    auth = check_opt('auth', self.daemons[producer['daemon']]['endpoints'][ep])
+                    auth_opt = check_opt('conf', self.daemons[producer['daemon']]['endpoints'][ep])
+                    if auth not in auth_list:
+                        auth_list[auth] = { 'conf' : auth_opt }
+                        plugin = check_opt('plugin', self.daemons[producer['daemon']]['endpoints'][ep]['auth'])
+                        if plugin is None:
+                            plugin = auth
+                        dstr += f'auth_add name={auth} plugin={plugin}'
+                        dstr = self.write_opt_attr(dstr, 'conf', auth_list[auth]['conf'], endline=True)
+                    regex = False
+                    pname = producer['endpoint']
+                    port = self.daemons[producer['daemon']]['endpoints'][ep]['port']
+                    xprt = self.daemons[producer['daemon']]['endpoints'][ep]['xprt']
+                    hostname = check_opt('host', self.daemons[producer['daemon']]['endpoints'][ep])
+                    if hostname is None:
+                        hostname = self.daemons[producer['daemon']]['addr']
+                    auth = check_opt('auth', self.daemons[producer['daemon']]['endpoints'][ep])
+                    perm = check_opt('perm', producer)
+                    rail = check_opt('rail', self.daemons[producer['daemon']]['endpoints'][ep])
+                    rx_rate = check_opt('rx_rate', self.daemons[producer['daemon']]['endpoints'][ep])
+                    quota = check_opt('quota', self.daemons[producer['daemon']]['endpoints'][ep])
+                    cache_ip = check_opt('cache_ip', producer)
+                    ptype = producer['type']
+                    reconnect = producer['reconnect']
+                    dstr += f'prdcr_add name={pname} '\
+                            f'host={hostname} '\
+                            f'port={port} '\
+                            f'xprt={xprt} '\
+                            f'type={ptype} '\
+                            f'reconnect={reconnect}'
+                    dstr = self.write_opt_attr(dstr, 'cache_ip', cache_ip)
+                    dstr = self.write_opt_attr(dstr, 'perm', perm)
+                    dstr = self.write_opt_attr(dstr, 'auth', auth)
+                    dstr = self.write_opt_attr(dstr, 'rail', rail)
+                    dstr = self.write_opt_attr(dstr, 'rx_rate', rx_rate)
+                    dstr = self.write_opt_attr(dstr, 'quota', quota, endline=True)
+                    if 'regex' in producer:
+                        dstr += f'prdcr_start_regex regex={producer["regex"]}\n'
+                    else :
+                        dstr += f'prdcr_start name={pname}\n'
+        except Exception as e:
+            print(f'Error parsing producer {pname} for aggregator {dmn}: {e}')
+        return dstr, auth_list
 
     def write_options(self, dstr, dname):
         if 'cli_opt' not in self.daemons[dname]:
