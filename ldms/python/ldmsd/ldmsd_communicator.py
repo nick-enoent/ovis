@@ -1326,8 +1326,14 @@ class Communicator(object):
         if plugin is not None:
             attrs.append(LDMSD_Req_Attr(attr_id=LDMSD_Req_Attr.PLUGIN, value=plugin))
         if auth_opt:
-            if len(auth_opt.split('=')) == 1:
-                auth_opt = 'conf='+auth_opt
+            if type(auth_opt) is dict:
+                auth_str = f''
+                for k, v in auth_opt.items():
+                   auth_str += f'{k}={v} '
+                auth_opt = auth_str
+            else:
+                if len(auth_opt.split('=')) == 1:
+                    auth_opt = 'conf='+auth_opt
             attrs.append(LDMSD_Req_Attr(attr_id=LDMSD_Req_Attr.STRING, value=auth_opt))
         req = LDMSD_Request(
                 command_id=LDMSD_Request.AUTH_ADD,

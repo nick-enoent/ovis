@@ -148,8 +148,12 @@ def check_auth(auth_spec):
     name = check_opt('auth', auth_spec)
     if not name:
         return None, None, None
-    plugin = check_opt('plugin', auth_spec['auth'])
-    auth_opt = check_opt('conf', auth_spec)
+    auth_spec = auth_spec['auth']
+    plugin = check_opt('plugin', auth_spec)
+    auth_opt = {}
+    for k, v in auth_spec.items():
+        if k != 'name' and k != 'plugin':
+            auth_opt[k] = v
     return name, plugin, auth_opt
 
 def check_plugin_config(plugn, plugin_spec):
@@ -385,7 +389,8 @@ class YamlCfg(object):
                         'port' : port,
                         'xprt' : xprt,
                         'maestro_comm' : maestro_comm,
-                        'auth' : { 'name' : auth_name, 'conf' : auth_opt, 'plugin' : plugin }
+                        'auth' : { 'name' : auth_name, 'plugin' : plugin } |
+                                    auth_opt
                     }
                     if check_opt('bind_all', ep):
                         h['bind_all'] = ep['bind_all']
@@ -425,8 +430,8 @@ class YamlCfg(object):
                                              'port'      : ad_grp['port'],
                                              'reconnect' : ad_grp['reconnect'],
                                              'auth'      : { 'name' : auth_name,
-                                                             'conf' : auth_opt,
-                                                             'plugin' : plugin },
+                                                             'plugin' : plugin }
+                                                             | auth_opt,
                                              'perm'      : perm,
                                              'rail'      : rail,
                                              'quota'   : quota,
@@ -841,10 +846,10 @@ class YamlCfg(object):
             quota = check_opt('quota', ad_grp)
             rx_rate = check_opt('rx_rate', ad_grp)
             if auth not in auth_listen:
-                auth_listen[auth] = { 'conf' : auth_opt }
+                auth_listen[auth] = plugin
                 dstr += f'auth_add name={auth}'
                 dstr = self.write_opt_attr(dstr, 'plugin', plugin)
-                dstr = self.write_opt_attr(dstr, 'conf', auth_opt, endline=True)
+                dstr = self.write_auth_conf(dstr, auth_opt)
             dstr += f'advertiser_add name={dname}-{host} host={host} xprt={ad_grp["xprt"]} port={ad_grp["port"]} '\
                     f'reconnect={ad_grp["reconnect"]}'
             dstr = self.write_opt_attr(dstr, 'auth', auth)
@@ -893,15 +898,14 @@ class YamlCfg(object):
             auth, plugin, auth_opt = check_auth(ep)
             if auth:
                 if auth not in auth_listen:
-                    auth_listen[auth] = { 'conf' : auth_opt }
+                    auth_listen[auth] = plugin
                     dstr += f'auth_add name={auth}'
                     dstr = self.write_opt_attr(dstr, 'plugin', plugin)
-                    dstr = self.write_opt_attr(dstr, 'conf', auth_opt, endline=True)
+                    dstr = self.write_auth_conf(dstr, auth_opt, endline=True)
             if ep["port"] not in auth_listen:
                 auth_listen[ep["port"]] = True
                 dstr += f'listen xprt={ep["xprt"]} port={ep["port"]}'
                 dstr = self.write_opt_attr(dstr, 'auth', auth)
-                dstr = self.write_opt_attr(dstr, 'conf', auth_opt)
                 bind_all = check_opt('bind_all', ep)
                 if bind_all is True or bind_all == "true":
                     host = "0.0.0.0"
@@ -912,6 +916,14 @@ class YamlCfg(object):
                         host = self.daemons[dmn_name]["addr"]
                 dstr = self.write_opt_attr(dstr, 'host', host, endline=True)
         return dstr, auth_listen
+
+    def write_auth_conf(self, dstr, auth_opt, endline=False):
+        if auth_opt is not None:
+            for k, v in auth_opt.items():
+                dstr = self.write_opt_attr(dstr, k, v)
+        if endline:
+            dstr += '\n'
+        return dstr
 
     def write_opt_attr(self, dstr, attr, val, endline=False):
         # Include leading space
@@ -932,15 +944,13 @@ class YamlCfg(object):
             auth = None
             for ep in prod_group:
                 producer = self.producers[group_name][ep]
-                auth = check_opt('auth', self.daemons[producer['daemon']]['endpoints'][ep])
-                auth_opt = check_opt('conf', self.daemons[producer['daemon']]['endpoints'][ep])
+                auth, plugin, auth_opt = check_auth(self.daemons[producer['daemon']]['endpoints'][ep])
                 if auth not in auth_listen:
-                    auth_listen[auth] = { 'conf' : auth_opt }
-                    plugin = check_opt('plugin', self.daemons[producer['daemon']]['endpoints'][ep]['auth'])
                     if plugin is None:
                         plugin = auth
+                    auth_listen[auth] = plugin
                     dstr += f'auth_add name={auth} plugin={plugin}'
-                    dstr = self.write_opt_attr(dstr, 'conf', auth_listen[auth]['conf'], endline=True)
+                    dstr = self.write_auth_conf(dstr, auth_opt, endline=True)
             for ep in prod_group:
                 regex = False
                 producer = self.producers[group_name][ep]
