@@ -2296,6 +2296,18 @@ class LdmsdCmdParser(Cmd.Cmd):
             msg = f'Error setting environment variables: {msg}'
         self.fmt_resp(rc, msg)
 
+    def do_get_env(self, arg):
+        """
+        Get an environment variable
+        """
+        arg = self.handle_args('get_env', arg)
+        if not arg:
+            return
+        rc, msg = self.comm.get_env(arg['name'])
+        if rc:
+            msg = f'Error retrieving environment variable: {msg}'
+        self.fmt_resp(rc, msg)
+
     def do_EOF(self, arg):
         """
         Ctrl-D will exit the shell

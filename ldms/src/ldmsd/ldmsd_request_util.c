@@ -82,6 +82,7 @@ struct req_str_id req_str_id_table[] = {
 	{  "default_auth",       LDMSD_DEFAULT_AUTH_REQ  },
 	{  "default_quota",      LDMSD_DEFAULT_QUOTA_REQ  },
 	{  "dump_cfg",           LDMSD_DUMP_CFG_REQ },
+	{  "get_env",		 LDMSD_GET_ENV_REQ },
 	{  "env",                LDMSD_ENV_REQ  },
 	{  "exit",               LDMSD_EXIT_DAEMON_REQ  },
 	{  "failover_config",    LDMSD_FAILOVER_CONFIG_REQ  },
@@ -360,6 +361,7 @@ const char *ldmsd_req_id2str(enum ldmsd_request req_id)
 	case LDMSD_DAEMON_STATUS_REQ     : return "DAEMON_STATUS_REQ";
 	case LDMSD_VERSION_REQ           : return "VERSION_REQ";
 	case LDMSD_ENV_REQ               : return "ENV_REQ";
+	case LDMSD_GET_ENV_REQ		 : return "GET_ENV_REQ";
 	case LDMSD_INCLUDE_REQ           : return "INCLUDE_REQ";
 	case LDMSD_ONESHOT_REQ           : return "ONESHOT_REQ";
 	case LDMSD_LOGROTATE_REQ         : return "LOGROTATE_REQ";

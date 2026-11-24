@@ -248,6 +248,7 @@ static int set_udata_regex_handler(ldmsd_req_ctxt_t req_ctxt);
 static int verbosity_change_handler(ldmsd_req_ctxt_t reqc);
 static int daemon_status_handler(ldmsd_req_ctxt_t reqc);
 static int version_handler(ldmsd_req_ctxt_t reqc);
+static int get_env_handler(ldmsd_req_ctxt_t req_ctxt);
 static int env_handler(ldmsd_req_ctxt_t req_ctxt);
 static int include_handler(ldmsd_req_ctxt_t req_ctxt);
 static int oneshot_handler(ldmsd_req_ctxt_t req_ctxt);
@@ -549,6 +550,9 @@ static struct request_handler_entry request_handler[] = {
 	},
 	[LDMSD_VERSION_REQ] = {
 		LDMSD_VERSION_REQ, version_handler, XALL
+	},
+	[LDMSD_GET_ENV_REQ] = {
+		LDMSD_GET_ENV_REQ, get_env_handler, XUG
 	},
 	[LDMSD_ENV_REQ] = {
 		LDMSD_ENV_REQ, env_handler, XUG | MOD
@@ -868,6 +872,7 @@ int is_req_id_priority(enum ldmsd_request req_id)
 {
 	switch (req_id) {
 	case LDMSD_ENV_REQ:
+	case LDMSD_GET_ENV_REQ:
 	case LDMSD_VERBOSE_REQ:
 	case LDMSD_LISTEN_REQ:
 	case LDMSD_AUTH_ADD_REQ:
@@ -6439,6 +6444,28 @@ static int version_handler(ldmsd_req_ctxt_t reqc)
 	}
 	ldmsd_send_req_response(reqc, reqc->line_buf);
 	return rc;
+}
+
+static int get_env_handler(ldmsd_req_ctxt_t reqc)
+{
+	int rc = 0;
+	char *env_s = NULL;
+	env_s = ldmsd_req_attr_str_value_get_by_id(reqc, LDMSD_ATTR_STRING);
+	if (!env_s) {
+		goto out;
+	}
+	char *v = getenv(env_s);
+	if (!v) {
+		rc = linebuf_printf(reqc, "No environment variable found for %s.", env_s);
+		reqc->errcode = ENOENT;
+		goto out;
+	} else {
+		rc = linebuf_printf(reqc, v);
+	}
+out:
+	ldmsd_send_req_response(reqc, reqc->line_buf);
+	return rc;
+
 }
 
 static int env_handler(ldmsd_req_ctxt_t reqc)

@@ -79,6 +79,7 @@ LDMSD_CTRL_CMD_MAP = {'usage': {'req_attr': [], 'opt_attr': ['name']},
                       'log_level': {'req_attr': ['level'],
                                    'opt_attr': ['name', 'regex', 'test']},
                       'include': {'req_attr': ['path'] },
+                      'get_env': {'req_attr':['name']},
                       'env': {'req_attr': []},
                       'logrotate': {'req_attr': [], 'opt_attr': []},
                       ###############################
@@ -684,6 +685,7 @@ class LDMSD_Request(object):
     XPRT_STATS_RESET = 0x600 + 36
     THREAD_STATS_RESET = 0x600 + 37
     PROFILING_RESET = 0x600 + 38
+    GET_ENV = 0x600 + 39
 
     FAILOVER_CONFIG        = 0x700
     FAILOVER_PEERCFG_START = 0x700  +  1
@@ -802,6 +804,7 @@ class LDMSD_Request(object):
             'log_level': {'id': VERBOSITY_CHANGE},
             'daemon_status': {'id': DAEMON_STATUS},
             'version': {'id': VERSION},
+            'get_env': {'id': GET_ENV},
             'env': {'id': ENV},
             'include': {'id': INCLUDE},
             'oneshot': {'id': ONESHOT},
@@ -2338,6 +2341,27 @@ class Communicator(object):
         - data is the ldms version or an error message if status !=0 or None
         """
         req = LDMSD_Request(command_id=LDMSD_Request.VERSION)
+        try:
+            req.send(self)
+            resp = req.receive(self)
+            return resp['errcode'], resp['msg']
+        except Exception as e:
+            return errno.ENOTCONN, str(e)
+
+    def get_env(self, env_s):
+        """
+        Get ldmsd environment variable
+
+        Parameters:
+        env_s - environment variable to retrieve
+
+        Returns:
+        A tuple of status, data
+        - status is an errno from the errno module
+        - data is the environment variable value or an error msg if status !=0
+        """
+        req = LDMSD_Request(command_id=LDMSD_Request.GET_ENV,
+                            attrs=[LDMSD_Req_Attr(attr_id=LDMSD_Req_Attr.STRING, value=env_s)])
         try:
             req.send(self)
             resp = req.receive(self)

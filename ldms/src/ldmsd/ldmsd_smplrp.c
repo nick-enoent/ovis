@@ -212,7 +212,7 @@ tmp_expand(ldmsd_smplrp_t p, ldmsd_smplrp_action_t _a, const char *job_id,
 	ovis_buff_init(&obuf, BUFSIZ);
 
 	/*
-	 * Pattern Exapnsion:
+	 * Pattern Expansion:
 	 * - "%W" - WORKFLOW_ID
 	 * - "%J" - Job ID
 	 * - "%C" - Component ID
